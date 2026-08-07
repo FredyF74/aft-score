@@ -358,30 +358,160 @@
     return state.altTime <= cap ? { go:true, cap } : { go:false, cap };
   }
 
-  function render(){
+  const cardRefs = {};
+
+  // Builds the DOM structure once (inputs, selects, static layout).
+  // Only called on init and on genuine structural changes (alt-event toggle/select) —
+  // NEVER on every keystroke, so the focused <input> is never destroyed and the
+  // iOS keyboard never gets dismissed mid-typing.
+  function buildCards(){
     const container = document.getElementById('events');
-
-    // remember what was focused (and cursor position) so rebuilding the
-    // event cards below doesn't yank focus away and dismiss the keyboard
-    const active = document.activeElement;
-    let focusId = null, selStart = null, selEnd = null;
-    if (active && container.contains(active) && active.id){
-      focusId = active.id;
-      try { selStart = active.selectionStart; selEnd = active.selectionEnd; } catch(e){}
-    }
-
     container.innerHTML = '';
 
+    EVENTS.forEach(ev => {
+      const isRun = ev.key === '2MR';
+      const usingAlt = isRun && state.useAlt;
+      const raw = state.raw[ev.key];
+
+      const card = document.createElement('div');
+      card.className = 'card event-card';
+      card.innerHTML = `
+        <div class="event-top">
+          <div class="event-name">
+            <div class="event-icon">${ev.icon}</div>
+            <div>
+              <div class="event-title">${ev.label}</div>
+              <div class="event-sub">${ ev.type==='time' ? 'mm:ss' : ev.unit }</div>
+            </div>
+          </div>
+          <div class="score-pill" data-r="pill">––</div>
+        </div>
+        <div class="inputs-slot"></div>
+        <div class="hints-slot"></div>
+        <div class="bench-row" data-r="benchRow">
+          <div class="bench"><div class="p">60</div><div class="v" data-r="b60">–</div></div>
+          <div class="bench"><div class="p">80</div><div class="v" data-r="b80">–</div></div>
+          <div class="bench"><div class="p">100</div><div class="v" data-r="b100">–</div></div>
+        </div>
+        ${ isRun ? `<div class="altbox">
+          <div class="toggle-line">
+            <span>Medical profile — use alternate event</span>
+            <div class="switch ${state.useAlt?'on':''}" data-r="altSwitch"><div class="knob"></div></div>
+          </div>
+          <div data-r="altControls" style="${state.useAlt?'':'display:none'}; margin-top:10px;">
+            <select data-r="altSelect"></select>
+            <div style="margin-top:10px;">
+              <label style="display:block; font-size:12px; color:var(--sub); margin-bottom:6px; font-weight:600;">Your time (mm:ss)</label>
+              <div class="timefield" data-r="altTimeField"></div>
+            </div>
+            <div class="hint" data-r="altHint" style="margin-top:10px;"></div>
+          </div>
+        </div>` : '' }
+      `;
+      container.appendChild(card);
+
+      const refs = {
+        card,
+        pill: card.querySelector('[data-r="pill"]'),
+        hintsSlot: card.querySelector('.hints-slot'),
+        benchRow: card.querySelector('[data-r="benchRow"]'),
+        b60: card.querySelector('[data-r="b60"]'),
+        b80: card.querySelector('[data-r="b80"]'),
+        b100: card.querySelector('[data-r="b100"]'),
+        altHint: card.querySelector('[data-r="altHint"]'),
+      };
+      cardRefs[ev.key] = refs;
+
+      // inputs (built once — typing only mutates these nodes' .value, never recreates them)
+      const inputsSlot = card.querySelector('.inputs-slot');
+      if (!usingAlt){
+        if (ev.type === 'number'){
+          inputsSlot.innerHTML = `<div class="field"><input type="number" inputmode="numeric" placeholder="0" min="${ev.min}" max="${ev.max}" id="in_${ev.key}" value="${raw===null||raw===undefined?'':raw}"></div>`;
+          const numInput = inputsSlot.querySelector('input');
+          numInput.addEventListener('input', (e)=>{
+            let v = e.target.value === '' ? null : parseFloat(e.target.value);
+            v = clampNum(v, ev.min, ev.max);
+            if (v !== null && String(v) !== e.target.value) e.target.value = v;
+            state.raw[ev.key] = v; persist(); updateDisplay();
+          });
+        } else {
+          const mm = raw===null||raw===undefined ? '' : Math.floor(raw/60);
+          const ss = raw===null||raw===undefined ? '' : String(raw%60).padStart(2,'0');
+          inputsSlot.innerHTML = `<div class="timefield">
+            <input class="mm" type="number" inputmode="numeric" placeholder="mm" min="0" max="${ev.mmMax}" id="in_${ev.key}_m" value="${mm}">
+            <span class="colon">:</span>
+            <input class="ss" type="number" inputmode="numeric" placeholder="ss" min="0" max="59" id="in_${ev.key}_s" value="${ss}">
+          </div>`;
+          const mInput = inputsSlot.querySelector(`#in_${ev.key}_m`);
+          const sInput = inputsSlot.querySelector(`#in_${ev.key}_s`);
+          const update = () => {
+            let mv = mInput.value === '' ? null : clampNum(parseInt(mInput.value,10), 0, ev.mmMax);
+            let sv = sInput.value === '' ? 0 : clampNum(parseInt(sInput.value,10), 0, 59);
+            if (mv !== null && String(mv) !== mInput.value) mInput.value = mv;
+            if (sInput.value !== '' && String(sv) !== sInput.value) sInput.value = sv;
+            if (mv === null && sInput.value === ''){ state.raw[ev.key] = null; }
+            else { state.raw[ev.key] = (mv||0)*60 + (sv||0); }
+            persist(); updateDisplay();
+          };
+          mInput.addEventListener('input', update);
+          sInput.addEventListener('input', update);
+        }
+      }
+
+      if (isRun){
+        const sw = card.querySelector('[data-r="altSwitch"]');
+        sw.addEventListener('click', () => {
+          state.useAlt = !state.useAlt; persist(); buildCards();
+        });
+        if (state.useAlt){
+          const sel = card.querySelector('[data-r="altSelect"]');
+          Object.keys(ALT_LABELS).forEach(k => {
+            const opt = document.createElement('option');
+            opt.value = k; opt.textContent = ALT_LABELS[k];
+            if (k === state.altEvent) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          sel.addEventListener('change', (e)=>{ state.altEvent = e.target.value; persist(); buildCards(); });
+
+          const tf = card.querySelector('[data-r="altTimeField"]');
+          const amm = state.altTime===null||state.altTime===undefined ? '' : Math.floor(state.altTime/60);
+          const ass = state.altTime===null||state.altTime===undefined ? '' : String(state.altTime%60).padStart(2,'0');
+          tf.innerHTML = `<input class="mm" type="number" inputmode="numeric" placeholder="mm" min="0" max="${ALT_MM_MAX}" id="alt_m" value="${amm}">
+            <span class="colon">:</span>
+            <input class="ss" type="number" inputmode="numeric" placeholder="ss" min="0" max="59" id="alt_s" value="${ass}">`;
+          const amI = tf.querySelector('#alt_m'), asI = tf.querySelector('#alt_s');
+          const updateAlt = () => {
+            let mv = amI.value === '' ? null : clampNum(parseInt(amI.value,10), 0, ALT_MM_MAX);
+            let sv = asI.value === '' ? 0 : clampNum(parseInt(asI.value,10), 0, 59);
+            if (mv !== null && String(mv) !== amI.value) amI.value = mv;
+            if (asI.value !== '' && String(sv) !== asI.value) asI.value = sv;
+            if (mv === null && asI.value === ''){ state.altTime = null; }
+            else { state.altTime = (mv||0)*60 + (sv||0); }
+            persist(); updateDisplay();
+          };
+          amI.addEventListener('input', updateAlt);
+          asI.addEventListener('input', updateAlt);
+        }
+      }
+    });
+
+    updateDisplay();
+  }
+
+  // Updates only derived text/classes (score pills, hints, bench numbers, summary bar).
+  // Called on every keystroke — never touches container.innerHTML or recreates inputs.
+  function updateDisplay(){
     let total = 0;
     let anyBelow60 = false;
     let allEntered = true;
 
     EVENTS.forEach(ev => {
       const isRun = ev.key === '2MR';
+      const refs = cardRefs[ev.key];
       const table = getTable(ev);
       const raw = state.raw[ev.key];
       let score = null;
-      let usingAlt = isRun && state.useAlt;
+      const usingAlt = isRun && state.useAlt;
 
       if (usingAlt){
         const st = altStatus();
@@ -396,30 +526,28 @@
         if (score < 60) anyBelow60 = true;
       }
 
-      const card = document.createElement('div');
-      card.className = 'card event-card';
-
       const pillClass = score === null ? '' : (score >= 60 ? 'pass' : 'fail');
-      const pillText = score === null ? '––' : score;
-
-      let bench60, bench80, bench100;
-      if (usingAlt){
-        bench60 = bench80 = bench100 = null;
-      } else {
-        bench60 = pointsToRaw(table, 60);
-        bench80 = pointsToRaw(table, 80);
-        bench100 = pointsToRaw(table, 100);
-      }
+      refs.pill.className = 'score-pill ' + pillClass;
+      refs.pill.textContent = usingAlt ? (score===null?'––':(score>=60?'GO':'NO-GO')) : (score===null?'––':score);
 
       const fmtRaw = (v) => ev.type === 'time' ? fmtTime(v) : Math.round(v);
 
+      if (usingAlt){
+        refs.benchRow.style.display = 'none';
+      } else {
+        refs.benchRow.style.display = '';
+        refs.b60.textContent = fmtRaw(pointsToRaw(table, 60));
+        refs.b80.textContent = fmtRaw(pointsToRaw(table, 80));
+        refs.b100.textContent = fmtRaw(pointsToRaw(table, 100));
+      }
+
       let hintHtml = '';
       if (!usingAlt){
+        const bench60 = pointsToRaw(table, 60);
         if (raw === null || raw === undefined || isNaN(raw)){
           hintHtml = `<div class="hint">Enter a value to see your score. Need <b>${fmtRaw(bench60)} ${ev.unit==='reps in 2:00' ? 'reps' : (ev.type==='time'?'':ev.unit)}</b> to pass (60 pts).</div>`;
         } else if (score < 60){
-          const table2 = table;
-          const needRaw = pointsToRaw(table2, 60);
+          const needRaw = bench60;
           const delta = ev.higherBetter ? (needRaw - raw) : (raw - needRaw);
           const deltaTxt = ev.type === 'time' ? fmtTime(Math.abs(delta)) : Math.ceil(Math.abs(delta));
           const verb = ev.type === 'time' ? (ev.higherBetter ? 'longer' : 'faster') : 'more';
@@ -437,132 +565,22 @@
           }
         }
       }
+      refs.hintsSlot.innerHTML = hintHtml;
 
-      card.innerHTML = `
-        <div class="event-top">
-          <div class="event-name">
-            <div class="event-icon">${ev.icon}</div>
-            <div>
-              <div class="event-title">${ev.label}</div>
-              <div class="event-sub">${ ev.type==='time' ? 'mm:ss' : ev.unit }</div>
-            </div>
-          </div>
-          <div class="score-pill ${pillClass}">${usingAlt ? (score===null?'––':(score>=60?'GO':'NO-GO')) : pillText}</div>
-        </div>
-        <div class="inputs-slot"></div>
-        <div class="hints-slot"></div>
-        ${ !usingAlt ? `<div class="bench-row">
-          <div class="bench"><div class="p">60</div><div class="v">${fmtRaw(bench60)}</div></div>
-          <div class="bench"><div class="p">80</div><div class="v">${fmtRaw(bench80)}</div></div>
-          <div class="bench"><div class="p">100</div><div class="v">${fmtRaw(bench100)}</div></div>
-        </div>` : '' }
-        ${ isRun ? `<div class="altbox">
-          <div class="toggle-line">
-            <span>Medical profile — use alternate event</span>
-            <div class="switch ${state.useAlt?'on':''}" id="altSwitch"><div class="knob"></div></div>
-          </div>
-          <div id="altControls" style="${state.useAlt?'':'display:none'}; margin-top:10px;">
-            <select id="altSelect"></select>
-            <div style="margin-top:10px;">
-              <label style="display:block; font-size:12px; color:var(--sub); margin-bottom:6px; font-weight:600;">Your time (mm:ss)</label>
-              <div class="timefield" id="altTimeField"></div>
-            </div>
-            <div class="hint" id="altHint" style="margin-top:10px;"></div>
-          </div>
-        </div>` : '' }
-      `;
-
-      container.appendChild(card);
-
-      card.querySelector('.hints-slot').innerHTML = hintHtml;
-
-      // inputs
-      const inputsSlot = card.querySelector('.inputs-slot');
-      if (!usingAlt){
-        if (ev.type === 'number'){
-          inputsSlot.innerHTML = `<div class="field"><input type="number" inputmode="numeric" placeholder="0" min="${ev.min}" max="${ev.max}" id="in_${ev.key}" value="${raw===null||raw===undefined?'':raw}"></div>`;
-          const numInput = inputsSlot.querySelector('input');
-          numInput.addEventListener('input', (e)=>{
-            let v = e.target.value === '' ? null : parseFloat(e.target.value);
-            v = clampNum(v, ev.min, ev.max);
-            if (v !== null && String(v) !== e.target.value) e.target.value = v;
-            state.raw[ev.key] = v; persist(); render();
-          });
+      if (isRun && refs.altHint){
+        const st = altStatus();
+        const band = ageToBand(clampAge());
+        const col = (state.standard === 'combat' || state.sex === 'M') ? 'M' : 'F';
+        const cap = DATA.ALT[state.altEvent][band][col];
+        if (!st){
+          refs.altHint.className = 'hint';
+          refs.altHint.textContent = `Pass/fail only. Cap for your age/sex: ${fmtTime(cap)}. Finishing at or under this earns the 60-pt minimum; over the cap scores 0 for this event.`;
+        } else if (st.go){
+          refs.altHint.className = 'hint good';
+          refs.altHint.textContent = `GO — under the ${fmtTime(cap)} cap. Alternate events are pass/fail and credit the 60-pt minimum (can't score above it).`;
         } else {
-          const cur = raw || 0;
-          const mm = raw===null||raw===undefined ? '' : Math.floor(raw/60);
-          const ss = raw===null||raw===undefined ? '' : String(raw%60).padStart(2,'0');
-          inputsSlot.innerHTML = `<div class="timefield">
-            <input class="mm" type="number" inputmode="numeric" placeholder="mm" min="0" max="${ev.mmMax}" id="in_${ev.key}_m" value="${mm}">
-            <span class="colon">:</span>
-            <input class="ss" type="number" inputmode="numeric" placeholder="ss" min="0" max="59" id="in_${ev.key}_s" value="${ss}">
-          </div>`;
-          const mInput = inputsSlot.querySelector(`#in_${ev.key}_m`);
-          const sInput = inputsSlot.querySelector(`#in_${ev.key}_s`);
-          const update = () => {
-            let mv = mInput.value === '' ? null : clampNum(parseInt(mInput.value,10), 0, ev.mmMax);
-            let sv = sInput.value === '' ? 0 : clampNum(parseInt(sInput.value,10), 0, 59);
-            if (mv !== null && String(mv) !== mInput.value) mInput.value = mv;
-            if (sInput.value !== '' && String(sv) !== sInput.value) sInput.value = sv;
-            if (mv === null && sInput.value === ''){ state.raw[ev.key] = null; }
-            else { state.raw[ev.key] = (mv||0)*60 + (sv||0); }
-            persist(); render();
-          };
-          mInput.addEventListener('input', update);
-          sInput.addEventListener('input', update);
-        }
-      } else {
-        inputsSlot.innerHTML = '';
-      }
-
-      if (isRun){
-        const sw = card.querySelector('#altSwitch');
-        sw.addEventListener('click', () => {
-          state.useAlt = !state.useAlt; persist(); render();
-        });
-        if (state.useAlt){
-          const sel = card.querySelector('#altSelect');
-          Object.keys(ALT_LABELS).forEach(k => {
-            const opt = document.createElement('option');
-            opt.value = k; opt.textContent = ALT_LABELS[k];
-            if (k === state.altEvent) opt.selected = true;
-            sel.appendChild(opt);
-          });
-          sel.addEventListener('change', (e)=>{ state.altEvent = e.target.value; persist(); render(); });
-
-          const tf = card.querySelector('#altTimeField');
-          const amm = state.altTime===null||state.altTime===undefined ? '' : Math.floor(state.altTime/60);
-          const ass = state.altTime===null||state.altTime===undefined ? '' : String(state.altTime%60).padStart(2,'0');
-          tf.innerHTML = `<input class="mm" type="number" inputmode="numeric" placeholder="mm" min="0" max="${ALT_MM_MAX}" id="alt_m" value="${amm}">
-            <span class="colon">:</span>
-            <input class="ss" type="number" inputmode="numeric" placeholder="ss" min="0" max="59" id="alt_s" value="${ass}">`;
-          const amI = tf.querySelector('#alt_m'), asI = tf.querySelector('#alt_s');
-          const updateAlt = () => {
-            let mv = amI.value === '' ? null : clampNum(parseInt(amI.value,10), 0, ALT_MM_MAX);
-            let sv = asI.value === '' ? 0 : clampNum(parseInt(asI.value,10), 0, 59);
-            if (mv !== null && String(mv) !== amI.value) amI.value = mv;
-            if (asI.value !== '' && String(sv) !== asI.value) asI.value = sv;
-            if (mv === null && asI.value === ''){ state.altTime = null; }
-            else { state.altTime = (mv||0)*60 + (sv||0); }
-            persist(); render();
-          };
-          amI.addEventListener('input', updateAlt);
-          asI.addEventListener('input', updateAlt);
-
-          const st = altStatus();
-          const band = ageToBand(clampAge());
-          const col = (state.standard === 'combat' || state.sex === 'M') ? 'M' : 'F';
-          const cap = DATA.ALT[state.altEvent][band][col];
-          const hintEl = card.querySelector('#altHint');
-          if (!st){
-            hintEl.textContent = `Pass/fail only. Cap for your age/sex: ${fmtTime(cap)}. Finishing at or under this earns the 60-pt minimum; over the cap scores 0 for this event.`;
-          } else if (st.go){
-            hintEl.className = 'hint good';
-            hintEl.textContent = `GO — under the ${fmtTime(cap)} cap. Alternate events are pass/fail and credit the 60-pt minimum (can't score above it).`;
-          } else {
-            hintEl.className = 'hint warn';
-            hintEl.textContent = `NO-GO — cap for your age/sex is ${fmtTime(cap)}.`;
-          }
+          refs.altHint.className = 'hint warn';
+          refs.altHint.textContent = `NO-GO — cap for your age/sex is ${fmtTime(cap)}.`;
         }
       }
     });
@@ -577,8 +595,6 @@
 
     const chip = document.getElementById('statusChip');
     const note = document.getElementById('summaryNote');
-    const eventsEntered = EVENTS.filter(ev => state.raw[ev.key] !== null && state.raw[ev.key] !== undefined && !isNaN(state.raw[ev.key])).length
-      + (state.useAlt ? 1 : 0) - (state.useAlt ? 1 : 0);
     const enteredCount = EVENTS.reduce((n, ev) => {
       if (ev.key === '2MR' && state.useAlt) return n + (state.altTime!==null && state.altTime!==undefined && !isNaN(state.altTime) ? 1 : 0);
       return n + (state.raw[ev.key]!==null && state.raw[ev.key]!==undefined && !isNaN(state.raw[ev.key]) ? 1 : 0);
@@ -599,17 +615,6 @@
     } else {
       chip.textContent = 'NOT PASSING'; chip.className = 'status-chip fail';
       note.textContent = `Need ${required - total} more points to reach ${required}.`;
-    }
-
-    // restore focus/cursor to the input the user was typing in
-    if (focusId){
-      const toFocus = document.getElementById(focusId);
-      if (toFocus){
-        toFocus.focus({ preventScroll: true });
-        if (selStart !== null && selEnd !== null){
-          try { toFocus.setSelectionRange(selStart, selEnd); } catch(e){}
-        }
-      }
     }
   }
 
@@ -672,13 +677,13 @@
     const btn = e.target.closest('button'); if (!btn) return;
     state.sex = btn.dataset.val;
     [...document.getElementById('sexSeg').children].forEach(b=>b.classList.toggle('active', b===btn));
-    persist(); render();
+    persist(); updateDisplay();
   });
   document.getElementById('stdSeg').addEventListener('click', (e) => {
     const btn = e.target.closest('button'); if (!btn) return;
     state.standard = btn.dataset.val;
     [...document.getElementById('stdSeg').children].forEach(b=>b.classList.toggle('active', b===btn));
-    persist(); render();
+    persist(); updateDisplay();
   });
   const ageEl = document.getElementById('age');
   ageEl.addEventListener('input', (e) => {
@@ -687,12 +692,12 @@
     if (v.length > 2) v = v.slice(0, 2);
     if (v !== '' && parseInt(v,10) > AGE_MAX) v = String(AGE_MAX);
     if (v !== e.target.value) e.target.value = v;
-    state.age = v; persist(); render();
+    state.age = v; persist(); updateDisplay();
   });
   ageEl.addEventListener('blur', (e) => {
     const clamped = clampAge();
     e.target.value = clamped;
-    state.age = clamped; persist(); render();
+    state.age = clamped; persist(); updateDisplay();
   });
 
   // init controls from state
@@ -700,7 +705,7 @@
   [...document.getElementById('sexSeg').children].forEach(b=>b.classList.toggle('active', b.dataset.val===state.sex));
   [...document.getElementById('stdSeg').children].forEach(b=>b.classList.toggle('active', b.dataset.val===state.standard));
 
-  render();
+  buildCards();
 })();
 </script>
 </body>
