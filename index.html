@@ -184,7 +184,7 @@
     <div class="row">
       <div class="field">
         <label for="age">Age</label>
-        <input id="age" type="number" inputmode="numeric" min="17" max="90" value="25">
+        <input id="age" type="number" inputmode="numeric" min="17" max="99" maxlength="2" value="25">
       </div>
       <div class="field">
         <label>Sex</label>
@@ -227,14 +227,21 @@
   const DATA = JSON.parse(document.getElementById('aft-data').textContent);
 
   const EVENTS = [
-    { key:'MDL', label:'3-Rep Max Deadlift', short:'Deadlift', icon:'\u{1F3CB}\u{FE0F}', unit:'lbs', higherBetter:true, type:'number', step:5 },
-    { key:'HRP', label:'Hand-Release Push-Up', short:'Push-Ups', icon:'\u{1F4AA}', unit:'reps in 2:00', higherBetter:true, type:'number', step:1 },
-    { key:'SDC', label:'Sprint-Drag-Carry', short:'Sprint-Drag-Carry', icon:'\u{1F6F7}', unit:'time', higherBetter:false, type:'time' },
-    { key:'PLK', label:'Plank', short:'Plank', icon:'\u{1F9D8}', unit:'hold time', higherBetter:true, type:'time' },
-    { key:'2MR', label:'Two-Mile Run', short:'2-Mile Run', icon:'\u{1F3C3}', unit:'time', higherBetter:false, type:'time' },
+    { key:'MDL', label:'3-Rep Max Deadlift', short:'Deadlift', icon:'\u{1F3CB}\u{FE0F}', unit:'lbs', higherBetter:true, type:'number', step:5, min:0, max:900 },
+    { key:'HRP', label:'Hand-Release Push-Up', short:'Push-Ups', icon:'\u{1F4AA}', unit:'reps in 2:00', higherBetter:true, type:'number', step:1, min:0, max:200 },
+    { key:'SDC', label:'Sprint-Drag-Carry', short:'Sprint-Drag-Carry', icon:'\u{1F6F7}', unit:'time', higherBetter:false, type:'time', mmMax:15 },
+    { key:'PLK', label:'Plank', short:'Plank', icon:'\u{1F9D8}', unit:'hold time', higherBetter:true, type:'time', mmMax:60 },
+    { key:'2MR', label:'Two-Mile Run', short:'2-Mile Run', icon:'\u{1F3C3}', unit:'time', higherBetter:false, type:'time', mmMax:60 },
   ];
 
   const ALT_LABELS = { WALK:'2.5-Mile Walk', BIKE:'12km Bike', SWIM:'1km Swim', ROW:'5km Row' };
+  const ALT_MM_MAX = 90;
+  const AGE_MIN = 17, AGE_MAX = 99;
+
+  function clampNum(v, min, max){
+    if (v === null || v === undefined || isNaN(v)) return v;
+    return Math.max(min, Math.min(max, v));
+  }
 
   const state = {
     age: 25,
@@ -327,7 +334,7 @@
   function clampAge(){
     let a = parseInt(state.age, 10);
     if (isNaN(a)) a = 17;
-    return Math.max(17, Math.min(90, a));
+    return Math.max(AGE_MIN, Math.min(AGE_MAX, a));
   }
 
   function scoreFor(ev){
@@ -457,9 +464,12 @@
       const inputsSlot = card.querySelector('.inputs-slot');
       if (!usingAlt){
         if (ev.type === 'number'){
-          inputsSlot.innerHTML = `<div class="field"><input type="number" inputmode="numeric" placeholder="0" id="in_${ev.key}" value="${raw===null||raw===undefined?'':raw}"></div>`;
-          inputsSlot.querySelector('input').addEventListener('input', (e)=>{
-            const v = e.target.value === '' ? null : parseFloat(e.target.value);
+          inputsSlot.innerHTML = `<div class="field"><input type="number" inputmode="numeric" placeholder="0" min="${ev.min}" max="${ev.max}" id="in_${ev.key}" value="${raw===null||raw===undefined?'':raw}"></div>`;
+          const numInput = inputsSlot.querySelector('input');
+          numInput.addEventListener('input', (e)=>{
+            let v = e.target.value === '' ? null : parseFloat(e.target.value);
+            v = clampNum(v, ev.min, ev.max);
+            if (v !== null && String(v) !== e.target.value) e.target.value = v;
             state.raw[ev.key] = v; persist(); render();
           });
         } else {
@@ -467,15 +477,17 @@
           const mm = raw===null||raw===undefined ? '' : Math.floor(raw/60);
           const ss = raw===null||raw===undefined ? '' : String(raw%60).padStart(2,'0');
           inputsSlot.innerHTML = `<div class="timefield">
-            <input class="mm" type="number" inputmode="numeric" placeholder="mm" id="in_${ev.key}_m" value="${mm}">
+            <input class="mm" type="number" inputmode="numeric" placeholder="mm" min="0" max="${ev.mmMax}" id="in_${ev.key}_m" value="${mm}">
             <span class="colon">:</span>
-            <input class="ss" type="number" inputmode="numeric" placeholder="ss" id="in_${ev.key}_s" value="${ss}">
+            <input class="ss" type="number" inputmode="numeric" placeholder="ss" min="0" max="59" id="in_${ev.key}_s" value="${ss}">
           </div>`;
           const mInput = inputsSlot.querySelector(`#in_${ev.key}_m`);
           const sInput = inputsSlot.querySelector(`#in_${ev.key}_s`);
           const update = () => {
-            const mv = mInput.value === '' ? null : parseInt(mInput.value,10);
-            const sv = sInput.value === '' ? 0 : parseInt(sInput.value,10);
+            let mv = mInput.value === '' ? null : clampNum(parseInt(mInput.value,10), 0, ev.mmMax);
+            let sv = sInput.value === '' ? 0 : clampNum(parseInt(sInput.value,10), 0, 59);
+            if (mv !== null && String(mv) !== mInput.value) mInput.value = mv;
+            if (sInput.value !== '' && String(sv) !== sInput.value) sInput.value = sv;
             if (mv === null && sInput.value === ''){ state.raw[ev.key] = null; }
             else { state.raw[ev.key] = (mv||0)*60 + (sv||0); }
             persist(); render();
@@ -505,13 +517,15 @@
           const tf = card.querySelector('#altTimeField');
           const amm = state.altTime===null||state.altTime===undefined ? '' : Math.floor(state.altTime/60);
           const ass = state.altTime===null||state.altTime===undefined ? '' : String(state.altTime%60).padStart(2,'0');
-          tf.innerHTML = `<input class="mm" type="number" inputmode="numeric" placeholder="mm" id="alt_m" value="${amm}">
+          tf.innerHTML = `<input class="mm" type="number" inputmode="numeric" placeholder="mm" min="0" max="${ALT_MM_MAX}" id="alt_m" value="${amm}">
             <span class="colon">:</span>
-            <input class="ss" type="number" inputmode="numeric" placeholder="ss" id="alt_s" value="${ass}">`;
+            <input class="ss" type="number" inputmode="numeric" placeholder="ss" min="0" max="59" id="alt_s" value="${ass}">`;
           const amI = tf.querySelector('#alt_m'), asI = tf.querySelector('#alt_s');
           const updateAlt = () => {
-            const mv = amI.value === '' ? null : parseInt(amI.value,10);
-            const sv = asI.value === '' ? 0 : parseInt(asI.value,10);
+            let mv = amI.value === '' ? null : clampNum(parseInt(amI.value,10), 0, ALT_MM_MAX);
+            let sv = asI.value === '' ? 0 : clampNum(parseInt(asI.value,10), 0, 59);
+            if (mv !== null && String(mv) !== amI.value) amI.value = mv;
+            if (asI.value !== '' && String(sv) !== asI.value) asI.value = sv;
             if (mv === null && asI.value === ''){ state.altTime = null; }
             else { state.altTime = (mv||0)*60 + (sv||0); }
             persist(); render();
@@ -583,8 +597,19 @@
     [...document.getElementById('stdSeg').children].forEach(b=>b.classList.toggle('active', b===btn));
     persist(); render();
   });
-  document.getElementById('age').addEventListener('input', (e) => {
-    state.age = e.target.value; persist(); render();
+  const ageEl = document.getElementById('age');
+  ageEl.addEventListener('input', (e) => {
+    let v = e.target.value;
+    // live-clamp only the upper bound (and strip anything past 2 digits) so typing isn't interrupted
+    if (v.length > 2) v = v.slice(0, 2);
+    if (v !== '' && parseInt(v,10) > AGE_MAX) v = String(AGE_MAX);
+    if (v !== e.target.value) e.target.value = v;
+    state.age = v; persist(); render();
+  });
+  ageEl.addEventListener('blur', (e) => {
+    const clamped = clampAge();
+    e.target.value = clamped;
+    state.age = clamped; persist(); render();
   });
 
   // init controls from state
