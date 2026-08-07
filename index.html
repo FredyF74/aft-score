@@ -159,6 +159,11 @@
   .progress-track{ height:8px; border-radius:100px; background:var(--bg2); border:1px solid var(--border); margin-top:10px; overflow:hidden; }
   .progress-fill{ height:100%; border-radius:100px; background:linear-gradient(90deg, var(--blue), var(--accent)); transition:width .25s ease; }
   .summary-note{ margin-top:8px; font-size:11.5px; color:var(--sub); font-weight:600; }
+  .share-btn{
+    width:100%; margin-top:12px; background:rgba(52,211,153,0.12); border:1px solid rgba(52,211,153,0.4);
+    color:var(--accent); font-weight:800; font-size:13.5px; padding:11px; border-radius:12px; transition:opacity .15s ease;
+  }
+  .share-btn:active{ opacity:0.7; }
 
   .footer{
     margin-top:8px; padding:14px 4px 4px; font-size:11px; color:var(--sub2); line-height:1.6; text-align:center;
@@ -213,11 +218,12 @@
 <div class="summary-bar">
   <div class="summary-inner">
     <div class="summary-top">
-      <div class="summary-total"><span class="num" id="totalNum">0</span><span class="of" id="totalOf">/ 300</span></div>
+      <div class="summary-total"><span class="num" id="totalNum">0</span><span class="of" id="totalOf">/ 500</span></div>
       <div class="status-chip fail" id="statusChip">Enter scores</div>
     </div>
     <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
     <div class="summary-note" id="summaryNote">Every event needs at least 60 points to pass.</div>
+    <button class="share-btn" id="shareBtn">Share result</button>
   </div>
 </div>
 
@@ -553,9 +559,10 @@
 
     // summary
     const required = state.standard === 'combat' ? 350 : 300;
+    const MAX_TOTAL = 500;
     document.getElementById('totalNum').textContent = allEntered ? total : (total > 0 ? total : 0);
-    document.getElementById('totalOf').textContent = '/ ' + required;
-    const pct = Math.max(0, Math.min(100, (total/required)*100));
+    document.getElementById('totalOf').textContent = '/ ' + MAX_TOTAL;
+    const pct = Math.max(0, Math.min(100, (total/MAX_TOTAL)*100));
     document.getElementById('progressFill').style.width = pct + '%';
 
     const chip = document.getElementById('statusChip');
@@ -584,6 +591,61 @@
       note.textContent = `Need ${required - total} more points to reach ${required}.`;
     }
   }
+
+  function buildShareText(){
+    const age = clampAge();
+    const sexLabel = state.sex === 'M' ? 'Male' : 'Female';
+    const stdLabel = state.standard === 'combat' ? 'Combat MOS' : 'General';
+    const required = state.standard === 'combat' ? 350 : 300;
+    let total = 0, anyBelow60 = false, complete = true;
+    const lines = [];
+    EVENTS.forEach(ev => {
+      const isRun = ev.key === '2MR';
+      let score, rawText;
+      if (isRun && state.useAlt){
+        const st = altStatus();
+        if (!st){ complete = false; return; }
+        score = st.go ? 60 : 0;
+        rawText = fmtTime(state.altTime) + ' (' + ALT_LABELS[state.altEvent] + ')';
+      } else {
+        const raw = state.raw[ev.key];
+        if (raw === null || raw === undefined || isNaN(raw)){ complete = false; return; }
+        score = scoreFor(ev);
+        rawText = ev.type === 'time' ? fmtTime(raw) : (Math.round(raw) + (ev.key === 'MDL' ? ' lbs' : ' reps'));
+      }
+      total += score;
+      if (score < 60) anyBelow60 = true;
+      lines.push(`${ev.short}: ${rawText} → ${score} pts`);
+    });
+    const status = !complete ? 'INCOMPLETE' : ((total >= required && !anyBelow60) ? 'PASSING' : 'NOT PASSING');
+    const header = `AFT Score: ${total}/500 — ${status}`;
+    const sub = `Age ${age}, ${sexLabel}, ${stdLabel} standard (need ${required}+)`;
+    return [header, sub, '', ...lines].join('\n');
+  }
+
+  const shareBtn = document.getElementById('shareBtn');
+  shareBtn.addEventListener('click', async () => {
+    const text = buildShareText();
+    const originalLabel = shareBtn.textContent;
+    try {
+      if (navigator.share){
+        await navigator.share({ text });
+        return;
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText){
+        await navigator.clipboard.writeText(text);
+        shareBtn.textContent = 'Copied to clipboard';
+        setTimeout(() => { shareBtn.textContent = originalLabel; }, 1800);
+        return;
+      }
+      window.prompt('Copy your results:', text);
+    } catch(e){
+      if (e && e.name === 'AbortError') return;
+      try {
+        window.prompt('Copy your results:', text);
+      } catch(e2){}
+    }
+  });
 
   document.getElementById('sexSeg').addEventListener('click', (e) => {
     const btn = e.target.closest('button'); if (!btn) return;
