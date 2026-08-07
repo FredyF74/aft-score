@@ -234,7 +234,7 @@
 
   const EVENTS = [
     { key:'MDL', label:'3-Rep Max Deadlift', short:'Deadlift', icon:'\u{1F3CB}\u{FE0F}', unit:'lbs', higherBetter:true, type:'number', step:5, min:0, max:900 },
-    { key:'HRP', label:'Hand-Release Push-Up', short:'Push-Ups', icon:'\u{1F4AA}', unit:'reps in 2:00', higherBetter:true, type:'number', step:1, min:0, max:200 },
+    { key:'HRP', label:'Hand-Release Push-Up', short:'Push-Ups', icon:'\u{1F4AA}', unit:'reps in 2:00', higherBetter:true, type:'number', step:1, min:0, max:200, advanceDigits:2 },
     { key:'SDC', label:'Sprint-Drag-Carry', short:'Sprint-Drag-Carry', icon:'\u{1F6F7}', unit:'time', higherBetter:false, type:'time', mmMax:15 },
     { key:'PLK', label:'Plank', short:'Plank', icon:'\u{1F9D8}', unit:'hold time', higherBetter:true, type:'time', mmMax:60 },
     { key:'2MR', label:'Two-Mile Run', short:'2-Mile Run', icon:'\u{1F3C3}', unit:'time', higherBetter:false, type:'time', mmMax:60 },
@@ -283,6 +283,15 @@
         focusNextField(el.id);
       }
     });
+  }
+
+  // How many digits the max value takes (900 -> 3, 200 -> 3, 59 -> 2). Once
+  // the field holds that many digits, one more digit could never be a valid
+  // extension of the same number — so it's safe to jump to the next field
+  // automatically instead of waiting for a "Next" key some numeric keypads
+  // don't show at all.
+  function digitsOf(max){
+    return String(Math.trunc(max)).length;
   }
 
   const state = {
@@ -471,6 +480,9 @@
             v = clampNum(v, ev.min, ev.max);
             if (v !== null && String(v) !== e.target.value) e.target.value = v;
             state.raw[ev.key] = v; persist(); updateDisplay();
+            if (e.target.value.length >= (ev.advanceDigits || digitsOf(ev.max))){
+              focusNextField(numInput.id);
+            }
           });
           wireEnterAdvance(numInput);
         } else {
@@ -484,7 +496,7 @@
           </div>`;
           const mInput = inputsSlot.querySelector(`#${mId}`);
           const sInput = inputsSlot.querySelector(`#${sId}`);
-          const update = () => {
+          const update = (source) => {
             let mv = mInput.value === '' ? null : clampNum(parseInt(mInput.value,10), 0, ev.mmMax);
             let sv = sInput.value === '' ? 0 : clampNum(parseInt(sInput.value,10), 0, 59);
             if (mv !== null && String(mv) !== mInput.value) mInput.value = mv;
@@ -492,9 +504,11 @@
             if (mv === null && sInput.value === ''){ state.raw[ev.key] = null; }
             else { state.raw[ev.key] = (mv||0)*60 + (sv||0); }
             persist(); updateDisplay();
+            if (source === mInput && mInput.value.length >= 2) focusNextField(mId);
+            else if (source === sInput && sInput.value.length >= 2) focusNextField(sId);
           };
-          mInput.addEventListener('input', update);
-          sInput.addEventListener('input', update);
+          mInput.addEventListener('input', () => update(mInput));
+          sInput.addEventListener('input', () => update(sInput));
           wireEnterAdvance(mInput);
           wireEnterAdvance(sInput);
         }
@@ -522,7 +536,7 @@
             <span class="colon">:</span>
             <input class="ss" type="number" inputmode="numeric" enterkeyhint="done" placeholder="ss" min="0" max="59" id="alt_s" value="${ass}">`;
           const amI = tf.querySelector('#alt_m'), asI = tf.querySelector('#alt_s');
-          const updateAlt = () => {
+          const updateAlt = (source) => {
             let mv = amI.value === '' ? null : clampNum(parseInt(amI.value,10), 0, ALT_MM_MAX);
             let sv = asI.value === '' ? 0 : clampNum(parseInt(asI.value,10), 0, 59);
             if (mv !== null && String(mv) !== amI.value) amI.value = mv;
@@ -530,9 +544,11 @@
             if (mv === null && asI.value === ''){ state.altTime = null; }
             else { state.altTime = (mv||0)*60 + (sv||0); }
             persist(); updateDisplay();
+            if (source === amI && amI.value.length >= 2) focusNextField('alt_m');
+            else if (source === asI && asI.value.length >= 2) focusNextField('alt_s');
           };
-          amI.addEventListener('input', updateAlt);
-          asI.addEventListener('input', updateAlt);
+          amI.addEventListener('input', () => updateAlt(amI));
+          asI.addEventListener('input', () => updateAlt(asI));
           wireEnterAdvance(amI);
           wireEnterAdvance(asI);
         }
@@ -737,6 +753,7 @@
     if (v !== '' && parseInt(v,10) > AGE_MAX) v = String(AGE_MAX);
     if (v !== e.target.value) e.target.value = v;
     state.age = v; persist(); updateDisplay();
+    if (v.length >= 2) focusNextField('age');
   });
   ageEl.addEventListener('blur', (e) => {
     const clamped = clampAge();
