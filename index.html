@@ -189,7 +189,7 @@
     <div class="row">
       <div class="field">
         <label for="age">Age</label>
-        <input id="age" type="number" inputmode="numeric" min="17" max="99" maxlength="2" value="25">
+        <input id="age" type="number" inputmode="numeric" enterkeyhint="next" min="17" max="99" maxlength="2" value="25">
       </div>
       <div class="field">
         <label>Sex</label>
@@ -247,6 +247,42 @@
   function clampNum(v, min, max){
     if (v === null || v === undefined || isNaN(v)) return v;
     return Math.max(min, Math.min(max, v));
+  }
+
+  // Ordered list of input ids for "next field" advancement. Depends on
+  // whether the alternate aerobic event is active, so it's computed fresh
+  // each time rather than hardcoded.
+  function getFieldOrder(){
+    const order = ['age', 'in_MDL', 'in_HRP', 'in_SDC_m', 'in_SDC_s', 'in_PLK_m', 'in_PLK_s'];
+    if (state.useAlt) order.push('alt_m', 'alt_s');
+    else order.push('in_2MR_m', 'in_2MR_s');
+    return order;
+  }
+
+  function focusNextField(currentId){
+    const order = getFieldOrder();
+    const idx = order.indexOf(currentId);
+    if (idx === -1 || idx === order.length - 1){
+      const el = document.getElementById(currentId);
+      if (el) el.blur();
+      return;
+    }
+    const nextEl = document.getElementById(order[idx + 1]);
+    if (nextEl){
+      nextEl.focus();
+      try { nextEl.select(); } catch(e){}
+    }
+  }
+
+  // Tapping "next"/"go" on the keyboard fires a real Enter keydown even on
+  // numeric keypads (iOS shows a next/done pill once enterkeyhint is set).
+  function wireEnterAdvance(el){
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        focusNextField(el.id);
+      }
+    });
   }
 
   const state = {
@@ -424,9 +460,11 @@
 
       // inputs (built once — typing only mutates these nodes' .value, never recreates them)
       const inputsSlot = card.querySelector('.inputs-slot');
+      const ekh = (id) => { const o = getFieldOrder(); return o[o.length-1] === id ? 'done' : 'next'; };
       if (!usingAlt){
         if (ev.type === 'number'){
-          inputsSlot.innerHTML = `<div class="field"><input type="number" inputmode="numeric" placeholder="0" min="${ev.min}" max="${ev.max}" id="in_${ev.key}" value="${raw===null||raw===undefined?'':raw}"></div>`;
+          const id = `in_${ev.key}`;
+          inputsSlot.innerHTML = `<div class="field"><input type="number" inputmode="numeric" enterkeyhint="${ekh(id)}" placeholder="0" min="${ev.min}" max="${ev.max}" id="${id}" value="${raw===null||raw===undefined?'':raw}"></div>`;
           const numInput = inputsSlot.querySelector('input');
           numInput.addEventListener('input', (e)=>{
             let v = e.target.value === '' ? null : parseFloat(e.target.value);
@@ -434,16 +472,18 @@
             if (v !== null && String(v) !== e.target.value) e.target.value = v;
             state.raw[ev.key] = v; persist(); updateDisplay();
           });
+          wireEnterAdvance(numInput);
         } else {
           const mm = raw===null||raw===undefined ? '' : Math.floor(raw/60);
           const ss = raw===null||raw===undefined ? '' : String(raw%60).padStart(2,'0');
+          const mId = `in_${ev.key}_m`, sId = `in_${ev.key}_s`;
           inputsSlot.innerHTML = `<div class="timefield">
-            <input class="mm" type="number" inputmode="numeric" placeholder="mm" min="0" max="${ev.mmMax}" id="in_${ev.key}_m" value="${mm}">
+            <input class="mm" type="number" inputmode="numeric" enterkeyhint="next" placeholder="mm" min="0" max="${ev.mmMax}" id="${mId}" value="${mm}">
             <span class="colon">:</span>
-            <input class="ss" type="number" inputmode="numeric" placeholder="ss" min="0" max="59" id="in_${ev.key}_s" value="${ss}">
+            <input class="ss" type="number" inputmode="numeric" enterkeyhint="${ekh(sId)}" placeholder="ss" min="0" max="59" id="${sId}" value="${ss}">
           </div>`;
-          const mInput = inputsSlot.querySelector(`#in_${ev.key}_m`);
-          const sInput = inputsSlot.querySelector(`#in_${ev.key}_s`);
+          const mInput = inputsSlot.querySelector(`#${mId}`);
+          const sInput = inputsSlot.querySelector(`#${sId}`);
           const update = () => {
             let mv = mInput.value === '' ? null : clampNum(parseInt(mInput.value,10), 0, ev.mmMax);
             let sv = sInput.value === '' ? 0 : clampNum(parseInt(sInput.value,10), 0, 59);
@@ -455,6 +495,8 @@
           };
           mInput.addEventListener('input', update);
           sInput.addEventListener('input', update);
+          wireEnterAdvance(mInput);
+          wireEnterAdvance(sInput);
         }
       }
 
@@ -476,9 +518,9 @@
           const tf = card.querySelector('[data-r="altTimeField"]');
           const amm = state.altTime===null||state.altTime===undefined ? '' : Math.floor(state.altTime/60);
           const ass = state.altTime===null||state.altTime===undefined ? '' : String(state.altTime%60).padStart(2,'0');
-          tf.innerHTML = `<input class="mm" type="number" inputmode="numeric" placeholder="mm" min="0" max="${ALT_MM_MAX}" id="alt_m" value="${amm}">
+          tf.innerHTML = `<input class="mm" type="number" inputmode="numeric" enterkeyhint="next" placeholder="mm" min="0" max="${ALT_MM_MAX}" id="alt_m" value="${amm}">
             <span class="colon">:</span>
-            <input class="ss" type="number" inputmode="numeric" placeholder="ss" min="0" max="59" id="alt_s" value="${ass}">`;
+            <input class="ss" type="number" inputmode="numeric" enterkeyhint="done" placeholder="ss" min="0" max="59" id="alt_s" value="${ass}">`;
           const amI = tf.querySelector('#alt_m'), asI = tf.querySelector('#alt_s');
           const updateAlt = () => {
             let mv = amI.value === '' ? null : clampNum(parseInt(amI.value,10), 0, ALT_MM_MAX);
@@ -491,6 +533,8 @@
           };
           amI.addEventListener('input', updateAlt);
           asI.addEventListener('input', updateAlt);
+          wireEnterAdvance(amI);
+          wireEnterAdvance(asI);
         }
       }
     });
@@ -699,6 +743,7 @@
     e.target.value = clamped;
     state.age = clamped; persist(); updateDisplay();
   });
+  wireEnterAdvance(ageEl);
 
   // init controls from state
   document.getElementById('age').value = state.age;
