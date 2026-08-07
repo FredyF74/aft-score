@@ -360,6 +360,16 @@
 
   function render(){
     const container = document.getElementById('events');
+
+    // remember what was focused (and cursor position) so rebuilding the
+    // event cards below doesn't yank focus away and dismiss the keyboard
+    const active = document.activeElement;
+    let focusId = null, selStart = null, selEnd = null;
+    if (active && container.contains(active) && active.id){
+      focusId = active.id;
+      try { selStart = active.selectionStart; selEnd = active.selectionEnd; } catch(e){}
+    }
+
     container.innerHTML = '';
 
     let total = 0;
@@ -589,6 +599,17 @@
     } else {
       chip.textContent = 'NOT PASSING'; chip.className = 'status-chip fail';
       note.textContent = `Need ${required - total} more points to reach ${required}.`;
+    }
+
+    // restore focus/cursor to the input the user was typing in
+    if (focusId){
+      const toFocus = document.getElementById(focusId);
+      if (toFocus){
+        toFocus.focus({ preventScroll: true });
+        if (selStart !== null && selEnd !== null){
+          try { toFocus.setSelectionRange(selStart, selEnd); } catch(e){}
+        }
+      }
     }
   }
 
