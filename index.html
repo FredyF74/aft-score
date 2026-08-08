@@ -77,6 +77,32 @@
   input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button{
     -webkit-appearance:none; margin:0;
   }
+  input[type=date]{
+    width:100%; background:var(--bg2); border:1px solid var(--border); color:var(--text);
+    font-size:16px; font-weight:700; padding:12px 12px; border-radius:12px; color-scheme:dark;
+  }
+  .history-empty{
+    font-size:13px; color:var(--sub2); text-align:center; padding:18px 8px; font-weight:600;
+  }
+  .history-item{
+    background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-bottom:10px;
+  }
+  .history-item:last-child{ margin-bottom:0; }
+  .history-top{ display:flex; align-items:center; justify-content:space-between; cursor:pointer; }
+  .history-date{ font-size:14px; font-weight:800; }
+  .history-sub{ font-size:11.5px; color:var(--sub); font-weight:600; margin-top:2px; }
+  .history-score{ display:flex; align-items:center; gap:8px; }
+  .history-score .num{ font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .history-detail{ margin-top:10px; padding-top:10px; border-top:1px solid var(--border); display:none; }
+  .history-detail.open{ display:block; }
+  .history-row{ display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0; color:var(--sub); }
+  .history-row b{ color:var(--text); font-weight:700; }
+  .history-actions{ display:flex; gap:8px; margin-top:10px; }
+  .history-actions button{
+    flex:1; font-size:12.5px; font-weight:700; padding:9px; border-radius:10px; border:1px solid var(--border); background:var(--bg); color:var(--sub);
+  }
+  .history-actions button.edit{ color:var(--blue); border-color:rgba(90,169,255,0.35); }
+  .history-actions button.del{ color:var(--red); border-color:rgba(255,95,90,0.35); }
   .seg{
     display:flex; background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:3px; gap:3px;
   }
@@ -206,9 +232,21 @@
         <button data-val="combat">Combat MOS (350)</button>
       </div>
     </div>
+    <div style="margin-top:12px;">
+      <label for="testDate" style="display:block; font-size:12px; color:var(--sub); margin-bottom:6px; font-weight:600;">Test date</label>
+      <input id="testDate" type="date" value="">
+    </div>
   </div>
 
   <div id="events"></div>
+
+  <div class="card" id="historyCard">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+      <h2 style="margin:0;">History</h2>
+      <span id="editingBadge" style="display:none; font-size:11px; font-weight:700; color:var(--amber); background:rgba(255,176,32,0.12); border:1px solid rgba(255,176,32,0.35); padding:4px 10px; border-radius:100px;">Editing</span>
+    </div>
+    <div id="historyList"></div>
+  </div>
 
   <div class="footer">
     Unofficial estimator using the U.S. Army's published AFT Scoring Scales (effective 1 Jun 2025). Values between published rows are linearly interpolated &mdash; treat scores as close estimates, not your certified record. Not affiliated with or endorsed by the U.S. Army.
@@ -223,7 +261,11 @@
     </div>
     <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
     <div class="summary-note" id="summaryNote">Every event needs at least 60 points to pass.</div>
-    <button class="share-btn" id="shareBtn">Share result</button>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="share-btn" id="saveBtn" style="margin-top:0; flex:1;">Save test</button>
+      <button class="share-btn" id="shareBtn" style="margin-top:0; flex:1; background:rgba(90,169,255,0.12); border-color:rgba(90,169,255,0.4); color:var(--blue);">Share result</button>
+    </div>
+    <button class="reset-btn" id="cancelEditBtn" style="display:none; margin-top:8px;">Cancel edit</button>
   </div>
 </div>
 
@@ -294,6 +336,13 @@
     return String(Math.trunc(max)).length;
   }
 
+  function todayStr(){
+    const d = new Date();
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const dd = String(d.getDate()).padStart(2,'0');
+    return `${d.getFullYear()}-${mm}-${dd}`;
+  }
+
   const state = {
     age: 25,
     sex: 'M',
@@ -302,11 +351,15 @@
     useAlt: false,
     altEvent: 'WALK',
     altTime: null,
+    testDate: todayStr(),
+    editingId: null,
+    history: [],
   };
 
   try {
     const saved = JSON.parse(localStorage.getItem('aftState') || 'null');
     if (saved) Object.assign(state, saved, { raw: Object.assign({}, state.raw, saved.raw || {}) });
+    if (!Array.isArray(state.history)) state.history = [];
   } catch(e){}
 
   function persist(){
@@ -678,35 +731,175 @@
     }
   }
 
-  function buildShareText(){
+  // Single source of truth for "what did this test add up to" — used by
+  // both the share text and history save, so they can never disagree.
+  function computeSummary(){
     const age = clampAge();
-    const sexLabel = state.sex === 'M' ? 'Male' : 'Female';
-    const stdLabel = state.standard === 'combat' ? 'Combat MOS' : 'General';
     const required = state.standard === 'combat' ? 350 : 300;
     let total = 0, anyBelow60 = false, complete = true;
-    const lines = [];
+    const perEvent = [];
     EVENTS.forEach(ev => {
       const isRun = ev.key === '2MR';
-      let score, rawText;
+      let score = null, rawText = '—', raw = null;
       if (isRun && state.useAlt){
         const st = altStatus();
-        if (!st){ complete = false; return; }
-        score = st.go ? 60 : 0;
-        rawText = fmtTime(state.altTime) + ' (' + ALT_LABELS[state.altEvent] + ')';
+        if (!st){ complete = false; }
+        else {
+          score = st.go ? 60 : 0;
+          raw = state.altTime;
+          rawText = fmtTime(state.altTime) + ' (' + ALT_LABELS[state.altEvent] + ')';
+        }
       } else {
-        const raw = state.raw[ev.key];
-        if (raw === null || raw === undefined || isNaN(raw)){ complete = false; return; }
-        score = scoreFor(ev);
-        rawText = ev.type === 'time' ? fmtTime(raw) : (Math.round(raw) + (ev.key === 'MDL' ? ' lbs' : ' reps'));
+        raw = state.raw[ev.key];
+        if (raw === null || raw === undefined || isNaN(raw)){ complete = false; }
+        else {
+          score = scoreFor(ev);
+          rawText = ev.type === 'time' ? fmtTime(raw) : (Math.round(raw) + (ev.key === 'MDL' ? ' lbs' : ' reps'));
+        }
       }
-      total += score;
-      if (score < 60) anyBelow60 = true;
-      lines.push(`${ev.short}: ${rawText} → ${score} pts`);
+      if (score !== null){
+        total += score;
+        if (score < 60) anyBelow60 = true;
+      }
+      perEvent.push({ key: ev.key, label: ev.short, raw, rawText, score });
     });
-    const status = !complete ? 'INCOMPLETE' : ((total >= required && !anyBelow60) ? 'PASSING' : 'NOT PASSING');
-    const header = `AFT Score: ${total}/500 — ${status}`;
-    const sub = `Age ${age}, ${sexLabel}, ${stdLabel} standard (need ${required}+)`;
+    const passed = complete && total >= required && !anyBelow60;
+    return { age, total, required, complete, anyBelow60, passed, perEvent };
+  }
+
+  function buildShareText(){
+    const s = computeSummary();
+    const sexLabel = state.sex === 'M' ? 'Male' : 'Female';
+    const stdLabel = state.standard === 'combat' ? 'Combat MOS' : 'General';
+    const status = !s.complete ? 'INCOMPLETE' : (s.passed ? 'PASSING' : 'NOT PASSING');
+    const header = `AFT Score: ${s.total}/500 — ${status}`;
+    const sub = `Age ${s.age}, ${sexLabel}, ${stdLabel} standard (need ${s.required}+)`;
+    const lines = s.perEvent.filter(p => p.score !== null).map(p => `${p.label}: ${p.rawText} → ${p.score} pts`);
     return [header, sub, '', ...lines].join('\n');
+  }
+
+  function fmtDatePretty(dateStr){
+    try {
+      const d = new Date(dateStr + 'T00:00:00');
+      if (isNaN(d.getTime())) return dateStr;
+      return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+    } catch(e){ return dateStr; }
+  }
+
+  function exitEditMode(){
+    state.editingId = null;
+    document.getElementById('editingBadge').style.display = 'none';
+    document.getElementById('cancelEditBtn').style.display = 'none';
+    document.getElementById('saveBtn').textContent = 'Save test';
+    persist();
+  }
+
+  function saveEntry(){
+    const s = computeSummary();
+    const wasEditing = !!state.editingId;
+    const entry = {
+      id: state.editingId || (Date.now() + '-' + Math.random().toString(36).slice(2, 8)),
+      date: document.getElementById('testDate').value || todayStr(),
+      age: state.age,
+      sex: state.sex,
+      standard: state.standard,
+      raw: Object.assign({}, state.raw),
+      useAlt: state.useAlt,
+      altEvent: state.altEvent,
+      altTime: state.altTime,
+      total: s.total,
+      required: s.required,
+      passed: s.passed,
+      complete: s.complete,
+      perEvent: s.perEvent,
+      savedAt: Date.now(),
+    };
+    if (wasEditing){
+      const idx = state.history.findIndex(h => h.id === state.editingId);
+      if (idx !== -1) state.history[idx] = entry; else state.history.push(entry);
+    } else {
+      state.history.push(entry);
+    }
+    exitEditMode();
+    persist();
+    renderHistory();
+    const btn = document.getElementById('saveBtn');
+    btn.textContent = 'Saved!';
+    setTimeout(() => { btn.textContent = 'Save test'; }, 1200);
+  }
+
+  function loadEntryForEdit(id){
+    const entry = state.history.find(h => h.id === id);
+    if (!entry) return;
+    state.editingId = id;
+    state.age = entry.age;
+    state.sex = entry.sex;
+    state.standard = entry.standard;
+    state.raw = Object.assign({ MDL:null, HRP:null, SDC:null, PLK:null, '2MR':null }, entry.raw);
+    state.useAlt = entry.useAlt;
+    state.altEvent = entry.altEvent;
+    state.altTime = entry.altTime;
+    state.testDate = entry.date;
+    persist();
+
+    document.getElementById('age').value = state.age;
+    document.getElementById('testDate').value = state.testDate;
+    [...document.getElementById('sexSeg').children].forEach(b=>b.classList.toggle('active', b.dataset.val===state.sex));
+    [...document.getElementById('stdSeg').children].forEach(b=>b.classList.toggle('active', b.dataset.val===state.standard));
+    document.getElementById('editingBadge').style.display = '';
+    document.getElementById('cancelEditBtn').style.display = '';
+    document.getElementById('saveBtn').textContent = 'Update entry';
+
+    buildCards();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function deleteEntry(id){
+    if (!window.confirm('Delete this saved test?')) return;
+    state.history = state.history.filter(h => h.id !== id);
+    if (state.editingId === id) exitEditMode();
+    persist();
+    renderHistory();
+  }
+
+  function renderHistory(){
+    const list = document.getElementById('historyList');
+    list.innerHTML = '';
+    const entries = [...state.history].sort((a, b) => b.date.localeCompare(a.date) || (b.savedAt - a.savedAt));
+    if (entries.length === 0){
+      list.innerHTML = '<div class="history-empty">No saved tests yet. Fill in your scores above, then tap Save test.</div>';
+      return;
+    }
+    entries.forEach(entry => {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      const statusLabel = !entry.complete ? 'INCOMPLETE' : (entry.passed ? 'PASS' : 'FAIL');
+      const statusColor = !entry.complete ? 'var(--sub)' : (entry.passed ? 'var(--accent)' : 'var(--red)');
+      const sexLabel = entry.sex === 'M' ? 'Male' : 'Female';
+      const stdLabel = entry.standard === 'combat' ? 'Combat MOS' : 'General';
+      item.innerHTML = `
+        <div class="history-top" data-r="top">
+          <div>
+            <div class="history-date">${fmtDatePretty(entry.date)}</div>
+            <div class="history-sub">Age ${entry.age} &middot; ${sexLabel} &middot; ${stdLabel} &middot; ${statusLabel}</div>
+          </div>
+          <div class="history-score"><span class="num" style="color:${statusColor}">${entry.total}/500</span></div>
+        </div>
+        <div class="history-detail" data-r="detail">
+          ${entry.perEvent.map(p => `<div class="history-row"><span>${p.label}</span><b>${p.rawText || '—'}${p.score!==null ? ' → '+p.score+' pts' : ''}</b></div>`).join('')}
+          <div class="history-actions">
+            <button class="edit" data-r="edit">Edit</button>
+            <button class="del" data-r="del">Delete</button>
+          </div>
+        </div>
+      `;
+      list.appendChild(item);
+      item.querySelector('[data-r="top"]').addEventListener('click', () => {
+        item.querySelector('[data-r="detail"]').classList.toggle('open');
+      });
+      item.querySelector('[data-r="edit"]').addEventListener('click', (e) => { e.stopPropagation(); loadEntryForEdit(entry.id); });
+      item.querySelector('[data-r="del"]').addEventListener('click', (e) => { e.stopPropagation(); deleteEntry(entry.id); });
+    });
   }
 
   const shareBtn = document.getElementById('shareBtn');
@@ -762,12 +955,31 @@
   });
   wireEnterAdvance(ageEl);
 
+  const testDateEl = document.getElementById('testDate');
+  testDateEl.addEventListener('change', (e) => {
+    state.testDate = e.target.value || todayStr();
+    persist();
+  });
+
+  document.getElementById('saveBtn').addEventListener('click', saveEntry);
+  document.getElementById('cancelEditBtn').addEventListener('click', exitEditMode);
+
   // init controls from state
   document.getElementById('age').value = state.age;
   [...document.getElementById('sexSeg').children].forEach(b=>b.classList.toggle('active', b.dataset.val===state.sex));
   [...document.getElementById('stdSeg').children].forEach(b=>b.classList.toggle('active', b.dataset.val===state.standard));
+  testDateEl.value = state.testDate || todayStr();
+
+  if (state.editingId && state.history.some(h => h.id === state.editingId)){
+    document.getElementById('editingBadge').style.display = '';
+    document.getElementById('cancelEditBtn').style.display = '';
+    document.getElementById('saveBtn').textContent = 'Update entry';
+  } else {
+    state.editingId = null;
+  }
 
   buildCards();
+  renderHistory();
 })();
 </script>
 </body>
